@@ -1,26 +1,19 @@
 # setup-tasks.ps1
-# Kör detta EN GÅNG som administratör för att registrera de schemalagda uppgifterna
-# Högerklicka på PowerShell -> "Kör som administratör"
+# Run once as Administrator to register scheduled tasks.
+# Right-click PowerShell -> "Run as Administrator"
 
 $scriptDir = "C:\Scripts"
+$psArgs = "-NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File"
 
-# ── Kontrollera att skriptmappen finns ─────────────────────────────────────
-if (-not (Test-Path $scriptDir)) {
-    New-Item -ItemType Directory -Path $scriptDir | Out-Null
-    Write-Host "Skapade mapp: $scriptDir"
-}
-
-# ── Kontrollera att skripten finns på plats ────────────────────────────────
+# Check that scripts exist
 foreach ($file in @("mute-evening.ps1", "unmute-morning.ps1")) {
     if (-not (Test-Path "$scriptDir\$file")) {
-        Write-Warning "Saknas: $scriptDir\$file — kopiera dit skriptet innan du fortsätter."
+        Write-Host "Missing: $scriptDir\$file - copy the file before continuing."
         exit 1
     }
 }
 
-$psArgs = "-NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File"
-
-# ── Uppgift 1: MUTE kl 18:00 varje dag ────────────────────────────────────
+# Task 1: MUTE at 18:00 every day
 $action1  = New-ScheduledTaskAction -Execute "powershell.exe" `
                 -Argument "$psArgs $scriptDir\mute-evening.ps1"
 $trigger1 = New-ScheduledTaskTrigger -Daily -At "18:00"
@@ -31,9 +24,9 @@ Register-ScheduledTask -TaskName "AudioMuteEvening" `
     -Action $action1 -Trigger $trigger1 -Settings $settings1 `
     -RunLevel Highest -Force | Out-Null
 
-Write-Host "✓ Registrerad: AudioMuteEvening (kl 18:00 varje dag)"
+Write-Host "OK: AudioMuteEvening registered (18:00 daily)"
 
-# ── Uppgift 2: UNMUTE kl 07:30 måndag–fredag ──────────────────────────────
+# Task 2: UNMUTE at 07:30 Monday-Friday
 $action2  = New-ScheduledTaskAction -Execute "powershell.exe" `
                 -Argument "$psArgs $scriptDir\unmute-morning.ps1"
 $trigger2 = New-ScheduledTaskTrigger -Weekly `
@@ -45,6 +38,6 @@ Register-ScheduledTask -TaskName "AudioUnmuteMorning" `
     -Action $action2 -Trigger $trigger2 -Settings $settings2 `
     -RunLevel Highest -Force | Out-Null
 
-Write-Host "✓ Registrerad: AudioUnmuteMorning (kl 07:30 mån–fre)"
+Write-Host "OK: AudioUnmuteMorning registered (07:30 Mon-Fri)"
 Write-Host ""
-Write-Host "Klart! Verifiera i Task Scheduler (taskschd.msc)."
+Write-Host "Done. Verify in Task Scheduler (taskschd.msc)."
