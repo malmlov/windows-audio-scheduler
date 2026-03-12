@@ -1,12 +1,12 @@
 # mute-evening.ps1
-# Sätter systemljudet till MUTE om datorn är låst eller idle >= 10 minuter
-# Placera i C:\Scripts\
+# Mutes system audio if idle >= 10 minutes or PC is locked.
+# Runs every 20 minutes after 18:00 (and all day on weekends).
+# Place in C:\Scripts\
 
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 
-// Hämtar idle-tid från Windows
 public class IdleDetector {
     [StructLayout(LayoutKind.Sequential)]
     struct LASTINPUTINFO {
@@ -21,11 +21,11 @@ public class IdleDetector {
         LASTINPUTINFO lii = new LASTINPUTINFO();
         lii.cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf(lii);
         GetLastInputInfo(ref lii);
-        return (Environment.TickCount - (int)lii.dwTime) / 60000.0;
+        long idle = (uint)Environment.TickCount - lii.dwTime;
+        return idle / 60000.0;
     }
 }
 
-// Sätter mute explicit via Windows Core Audio API (IAudioEndpointVolume)
 [Guid("5CDF2C82-841E-4546-9722-0CF74078229A")]
 [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 interface IAudioEndpointVolume {
@@ -60,34 +60,25 @@ interface IMMDeviceEnumerator {
     int GetDefaultAudioEndpoint(uint dataFlow, uint role, out IMMDevice ppDevice);
 }
 
-[ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-class MMDeviceEnumeratorClass {}
-
 public class AudioController {
     public static void SetMute(bool mute) {
         var enumeratorType = Type.GetTypeFromCLSID(new Guid("BCDE0395-E52F-467C-8E3D-C4579291692E"));
         var enumerator = (IMMDeviceEnumerator)Activator.CreateInstance(enumeratorType);
         IMMDevice device;
-        enumerator.GetDefaultAudioEndpoint(0, 1, out device); // eRender, eMultimedia
-
+        enumerator.GetDefaultAudioEndpoint(0, 1, out device);
         Guid iid = typeof(IAudioEndpointVolume).GUID;
         object volObj;
         device.Activate(ref iid, 23, IntPtr.Zero, out volObj);
         var vol = (IAudioEndpointVolume)volObj;
-
         Guid empty = Guid.Empty;
         vol.SetMute(mute, ref empty);
     }
 }
 "@ -Language CSharp
 
-# ── Kontrollera om datorn är låst ──────────────────────────────────────────
-$locked = (Get-Process -Name "LogonUI" -ErrorAction SilentlyContinue) -ne $null
-
-# ── Kontrollera idle-tid ────────────────────────────────────────────────────
+$locked      = (Get-Process -Name "LogonUI" -ErrorAction SilentlyContinue) -ne $null
 $idleMinutes = [IdleDetector]::GetIdleMinutes()
 
-# ── Sätt MUTE om låst eller idle >= 10 min ─────────────────────────────────
 if ($locked -or $idleMinutes -ge 10) {
     [AudioController]::SetMute($true)
     Write-Host "$(Get-Date -Format 'yyyy-MM-dd HH:mm') - Muted (locked=$locked, idle=$([math]::Round($idleMinutes,1)) min)"

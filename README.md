@@ -4,21 +4,23 @@ Automatically mutes and unmutes system audio on a schedule using PowerShell and 
 
 ## Behavior
 
-| Time | Condition | Action |
-|---|---|---|
-| 18:00 (daily) | PC is locked | → Mute |
-| 18:00 (daily) | Idle ≥ 10 minutes | → Mute |
-| 18:00 (daily) | User is active | → Do nothing |
-| 07:30 (Mon–Fri) | — | → Unmute |
-| Weekend | — | Audio stays muted |
+| Situation | Action |
+|---|---|
+| Weekday after 18:00, idle >= 10 min | Mute |
+| Weekday after 18:00, PC locked | Mute |
+| Weekday after 18:00, actively working | Skip (check again in 20 min) |
+| You unmute manually, then go idle | Mute again after 10 min |
+| Weekend (all day), idle >= 10 min | Mute |
+| Weekday 07:30 | Unmute |
+| Running on battery | Tasks do not run |
 
-Manual adjustments via the Windows tray volume control are always respected — the schedule only kicks in at the next scheduled run.
+Manual adjustments via the Windows tray volume control are always respected — the schedule only kicks in at the next 20-minute check.
 
 ## Files
 
 | File | Description |
 |---|---|
-| `mute-evening.ps1` | Mutes audio at 18:00 if PC is locked or idle |
+| `mute-evening.ps1` | Mutes audio if PC is locked or idle >= 10 min |
 | `unmute-morning.ps1` | Unmutes audio at 07:30 on weekdays |
 | `setup-tasks.ps1` | Registers both tasks in Windows Task Scheduler |
 
@@ -26,54 +28,58 @@ Manual adjustments via the Windows tray volume control are always respected — 
 
 - Windows 10 or 11
 - PowerShell 5.1 or later (included in Windows)
-- No admin rights needed to run the audio scripts themselves — only `setup-tasks.ps1` requires admin
+- Admin rights required only for `setup-tasks.ps1`
 
 ## Installation
 
 1. Copy all three `.ps1` files to `C:\Scripts\`
-2. Right-click `setup-tasks.ps1` → **Run with PowerShell as Administrator**
-3. Verify in Task Scheduler (`taskschd.msc`) that both tasks appear
+2. Right-click PowerShell -> **Run as Administrator**
+3. Run:
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\Scripts\setup-tasks.ps1
+```
+4. Verify in Task Scheduler (`taskschd.msc`) that both tasks appear
 
 ## Configuration
 
-All timing and behavior is configured in `setup-tasks.ps1` and `mute-evening.ps1`.
-
-### Change the mute/unmute times
-Edit the trigger lines in `setup-tasks.ps1`:
-
-```powershell
-# Evening mute time
-$trigger1 = New-ScheduledTaskTrigger -Daily -At "18:00"
-
-# Morning unmute time (weekdays only)
-$trigger2 = New-ScheduledTaskTrigger -Weekly `
-    -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "07:30"
-```
-
-### Change the idle threshold
-Edit this line in `mute-evening.ps1` (default: 10 minutes):
-
+### Change idle threshold (default: 10 minutes)
+Edit `mute-evening.ps1`:
 ```powershell
 if ($locked -or $idleMinutes -ge 10) {
 ```
 
-### Enable unmute on weekends
-Add `Saturday,Sunday` to the `-DaysOfWeek` parameter in `setup-tasks.ps1`:
-
+### Change mute start time (default: 18:00)
+Edit `setup-tasks.ps1`:
 ```powershell
--DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday,Saturday,Sunday
+$weekdayTrigger = New-ScheduledTaskTrigger -Weekly `
+    -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "18:00"
+```
+
+### Change unmute time (default: 07:30)
+Edit `setup-tasks.ps1`:
+```powershell
+$trigger2 = New-ScheduledTaskTrigger -Weekly `
+    -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "07:30"
+```
+
+### Change check interval (default: every 20 minutes)
+Edit both repetition lines in `setup-tasks.ps1`:
+```powershell
+$weekdayTrigger.RepetitionInterval = "PT20M"   # PT20M = 20 min, PT10M = 10 min
 ```
 
 ### Re-apply after changes
-After editing any settings, re-run `setup-tasks.ps1` as Administrator. The `-Force` flag ensures existing tasks are overwritten cleanly.
+Re-run `setup-tasks.ps1` as Administrator. The `-Force` flag overwrites existing tasks cleanly.
 
 ## How It Works
 
-**Audio control** uses the Windows Core Audio API (`IAudioEndpointVolume`) via COM interop embedded as inline C# in PowerShell. This calls `SetMute(true/false)` explicitly — not a toggle — making it safe and predictable regardless of the current mute state.
+**Audio control** uses the Windows Core Audio API (`IAudioEndpointVolume`) via COM interop embedded as inline C# in PowerShell. Calls `SetMute(true/false)` explicitly — not a toggle.
 
-**Idle detection** calls `GetLastInputInfo` from `user32.dll`, which returns the timestamp of the last mouse or keyboard input.
+**Idle detection** calls `GetLastInputInfo` from `user32.dll`, returning the timestamp of the last mouse or keyboard input.
 
-**Lock detection** checks whether the `LogonUI.exe` process is running, which Windows starts whenever the screen is locked.
+**Lock detection** checks whether `LogonUI.exe` is running, which Windows starts when the screen is locked.
+
+**AC power only** — tasks are configured with `DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries`, so they never run on battery.
 
 ## License
 
