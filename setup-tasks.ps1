@@ -13,55 +13,86 @@ foreach ($file in @("mute-evening.ps1", "unmute-morning.ps1")) {
     }
 }
 
-# Settings: only run on AC power (not battery)
-$acOnly = New-ScheduledTaskSettingsSet `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 2) `
-    -StartWhenAvailable `
-    -DisallowStartIfOnBatteries `
-    -StopIfGoingOnBatteries
-
 # ---------------------------------------------------------------
 # Task 1: MUTE - runs every 20 minutes from 18:00 on weekdays
+#         and all day on weekends. AC power only.
+# Uses schtasks.exe which has full support for repetition and AC.
 # ---------------------------------------------------------------
-$action1 = New-ScheduledTaskAction -Execute "powershell.exe" `
-               -Argument "$psArgs $scriptDir\mute-evening.ps1"
 
-# Weekday trigger: 18:00, repeat every 20 min until midnight
-$weekdayTrigger = New-ScheduledTaskTrigger -Weekly `
-    -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "18:00"
-$weekdayTrigger.RepetitionInterval = "PT20M"
-$weekdayTrigger.RepetitionDuration = "PT6H"   # 18:00 -> 00:00
+# Weekdays: 18:00 to 00:00 (6 hours), every 20 min
+schtasks /create /tn "AudioMuteEvening" /f `
+    /sc WEEKLY /d MON,TUE,WED,THU,FRI `
+    /st 18:00 /du 0006:00 /ri 20 `
+    /tr "powershell.exe $psArgs $scriptDir\mute-evening.ps1" `
+    /rl HIGHEST /it
 
-# Weekend trigger: 00:00, repeat every 20 min all day
-$saturdayTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Saturday -At "00:00"
-$saturdayTrigger.RepetitionInterval = "PT20M"
-$saturdayTrigger.RepetitionDuration = "P1D"   # all day
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "OK: AudioMuteEvening weekday trigger registered"
+} else {
+    Write-Host "ERROR: AudioMuteEvening weekday trigger failed"
+}
 
-$sundayTrigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At "00:00"
-$sundayTrigger.RepetitionInterval = "PT20M"
-$sundayTrigger.RepetitionDuration = "P1D"     # all day
+# Saturday: all day, every 20 min
+schtasks /create /tn "AudioMuteSaturday" /f `
+    /sc WEEKLY /d SAT `
+    /st 00:00 /du 0023:59 /ri 20 `
+    /tr "powershell.exe $psArgs $scriptDir\mute-evening.ps1" `
+    /rl HIGHEST /it
 
-Register-ScheduledTask -TaskName "AudioMuteEvening" `
-    -Action $action1 `
-    -Trigger @($weekdayTrigger, $saturdayTrigger, $sundayTrigger) `
-    -Settings $acOnly `
-    -RunLevel Highest -Force | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "OK: AudioMuteSaturday trigger registered"
+} else {
+    Write-Host "ERROR: AudioMuteSaturday trigger failed"
+}
 
-Write-Host "OK: AudioMuteEvening registered (weekdays 18:00+, weekends all day, every 20 min, AC only)"
+# Sunday: all day, every 20 min
+schtasks /create /tn "AudioMuteSunday" /f `
+    /sc WEEKLY /d SUN `
+    /st 00:00 /du 0023:59 /ri 20 `
+    /tr "powershell.exe $psArgs $scriptDir\mute-evening.ps1" `
+    /rl HIGHEST /it
+
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "OK: AudioMuteSunday trigger registered"
+} else {
+    Write-Host "ERROR: AudioMuteSunday trigger failed"
+}
 
 # ---------------------------------------------------------------
-# Task 2: UNMUTE at 07:30 Monday-Friday
+# Task 2: UNMUTE at 07:30 Monday-Friday. AC power only.
 # ---------------------------------------------------------------
-$action2 = New-ScheduledTaskAction -Execute "powershell.exe" `
-               -Argument "$psArgs $scriptDir\unmute-morning.ps1"
+schtasks /create /tn "AudioUnmuteMorning" /f `
+    /sc WEEKLY /d MON,TUE,WED,THU,FRI `
+    /st 07:30 `
+    /tr "powershell.exe $psArgs $scriptDir\unmute-morning.ps1" `
+    /rl HIGHEST /it
 
-$trigger2 = New-ScheduledTaskTrigger -Weekly `
-    -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "07:30"
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "OK: AudioUnmuteMorning registered (07:30 Mon-Fri)"
+} else {
+    Write-Host "ERROR: AudioUnmuteMorning failed"
+}
 
-Register-ScheduledTask -TaskName "AudioUnmuteMorning" `
-    -Action $action2 -Trigger $trigger2 -Settings $acOnly `
-    -RunLevel Highest -Force | Out-Null
+# ---------------------------------------------------------------
+# Set AC-only via XML patch (schtasks does not expose this flag)
+# ---------------------------------------------------------------
+$tasks = @("AudioMuteEvening", "AudioMuteSaturday", "AudioMuteSunday", "AudioUnmuteMorning")
+foreach ($task in $tasks) {
+    $xml = schtasks /query /tn $task /xml ONE 2>$null
+    if ($xml) {
+        $xml = $xml -replace "<DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>", "<DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>"
+        $xml = $xml -replace "<StopIfGoingOnBatteries>true</StopIfGoingOnBatteries>", "<StopIfGoingOnBatteries>true</StopIfGoingOnBatteries>"
+        # Add battery settings if not present
+        if ($xml -notmatch "DisallowStartIfOnBatteries") {
+            $xml = $xml -replace "</Settings>", "  <DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>`n  <StopIfGoingOnBatteries>true</StopIfGoingOnBatteries>`n</Settings>"
+        }
+        $tmpFile = "$env:TEMP\task_$task.xml"
+        $xml | Out-File -FilePath $tmpFile -Encoding UTF8
+        schtasks /create /tn $task /f /xml $tmpFile | Out-Null
+        Remove-Item $tmpFile -ErrorAction SilentlyContinue
+        Write-Host "OK: AC-only set for $task"
+    }
+}
 
-Write-Host "OK: AudioUnmuteMorning registered (07:30 Mon-Fri, AC only)"
 Write-Host ""
 Write-Host "Done. Verify in Task Scheduler (taskschd.msc)."
